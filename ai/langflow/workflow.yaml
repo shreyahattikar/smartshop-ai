@@ -1,0 +1,124 @@
+# LangFlow Configuration for SmartShop AI
+# This YAML describes the agent workflow. Import into LangFlow UI.
+# LangFlow: https://docs.langflow.org/
+
+name: SmartShop AI Agent Workflow
+version: "1.0"
+description: Agentic AI shopping assistant using IBM Granite Models and RAG
+
+components:
+  - id: user_input
+    type: TextInput
+    label: "User Shopping Query"
+    
+  - id: intent_router
+    type: PythonFunction
+    label: "Intent Router Agent"
+    description: "Detects query intent and routes to appropriate agent"
+    code: |
+      def route_intent(query: str) -> str:
+          q = query.lower()
+          if any(x in q for x in ['compare', ' vs ', 'versus']): return 'compare'
+          if any(x in q for x in ['review', 'rating', 'feedback']): return 'review'
+          if any(x in q for x in ['price', 'discount', 'deal']): return 'price'
+          if any(x in q for x in ['sustainable', 'eco', 'green']): return 'sustainability'
+          if any(x in q for x in ['find', 'search', 'recommend', 'best', 'suggest']): return 'recommend'
+          return 'general'
+
+  - id: rag_retriever
+    type: VectorStoreRetriever
+    label: "Product RAG Retriever"
+    config:
+      vector_store: in_memory  # Replace with Chroma/Pinecone for production
+      top_k: 6
+      
+  - id: granite_llm
+    type: IBMWatsonxLLM
+    label: "IBM Granite 13B Chat"
+    config:
+      model_id: "ibm/granite-13b-chat-v2"
+      project_id: "${WATSONX_PROJECT_ID}"
+      api_key: "${WATSONX_API_KEY}"
+      url: "${WATSONX_URL}"
+      parameters:
+        max_new_tokens: 512
+        temperature: 0.7
+        decoding_method: greedy
+        repetition_penalty: 1.1
+
+  - id: product_search_agent
+    type: ConversationalAgent
+    label: "Product Search Agent"
+    llm: granite_llm
+    tools: [product_db_tool, filter_tool]
+    system_prompt: |
+      You are a product search specialist. 
+      Extract: category, budget, brand preferences, and requirements from user queries.
+      Return relevant products from the catalog with clear explanations.
+      Always acknowledge when running in demo mode.
+
+  - id: comparison_agent
+    type: ConversationalAgent
+    label: "Product Comparison Agent"
+    llm: granite_llm
+    system_prompt: |
+      You are a product comparison specialist.
+      Compare products fairly based on: price, specs, ratings, and sustainability.
+      Never declare an absolute winner. Help users decide based on their priorities.
+      Always add: "Verify current prices before purchase."
+
+  - id: review_agent
+    type: ConversationalAgent
+    label: "Review Analysis Agent"
+    llm: granite_llm
+    system_prompt: |
+      You are a review analysis specialist.
+      Summarize reviews: identify pros, cons, and common themes.
+      Flag potentially suspicious patterns as indicators only — not definitive proof.
+      Always add: "Review analysis may contain errors. Use as one factor in your decision."
+
+  - id: price_agent
+    type: ConversationalAgent
+    label: "Price Intelligence Agent"
+    llm: granite_llm
+    system_prompt: |
+      You are a price intelligence specialist.
+      Analyze price trends and provide insights based on historical data.
+      Never guarantee future prices. Always say: "Price forecasts are estimates only."
+
+  - id: sustainability_agent
+    type: ConversationalAgent
+    label: "Sustainability Insights Agent"
+    llm: granite_llm
+    system_prompt: |
+      You are a sustainability specialist.
+      Present available eco-friendly information for products.
+      Never fabricate sustainability certifications.
+      When data is unavailable, say: "Not enough verified data for this indicator."
+
+  - id: orchestrator
+    type: OrchestratorAgent
+    label: "Shopping Assistant Orchestrator"
+    llm: granite_llm
+    sub_agents:
+      - product_search_agent
+      - comparison_agent
+      - review_agent
+      - price_agent
+      - sustainability_agent
+    system_prompt: |
+      You are SmartShop AI — an intelligent shopping assistant orchestrator.
+      Route user queries to the appropriate specialist agent.
+      Combine retrieved information into clear, helpful responses.
+      Always be honest about demo mode and data limitations.
+
+connections:
+  - from: user_input     -> intent_router
+  - from: user_input     -> rag_retriever
+  - from: rag_retriever  -> orchestrator
+  - from: intent_router  -> orchestrator
+  - from: orchestrator   -> product_search_agent
+  - from: orchestrator   -> comparison_agent
+  - from: orchestrator   -> review_agent
+  - from: orchestrator   -> price_agent
+  - from: orchestrator   -> sustainability_agent
